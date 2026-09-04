@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Zettel zu Kalender</title>
+  <meta name="theme-color" content="#2563eb">
+  <style>
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 0; }
+    body { background: #f3f4f6; color: #1f2937; padding: 16px; display: flex; flex-direction: column; align-items: center; min-height: 100vh; }
+    .card { background: white; width: 100%; max-width: 480px; border-radius: 16px; padding: 20px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); margin-bottom: 16px; }
+    h1 { font-size: 1.25rem; font-weight: 700; margin-bottom: 12px; color: #111827; }
+    p { font-size: 0.9rem; color: #4b5563; margin-bottom: 16px; }
+    input[type="text"], input[type="password"] { width: 100%; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 0.95rem; margin-bottom: 12px; outline: none; }
+    input[type="text"]:focus, input[type="password"]:focus { border-color: #2563eb; }
+    .btn { display: inline-flex; align-items: center; justify-content: center; width: 100%; padding: 14px; background: #2563eb; color: white; border: none; border-radius: 10px; font-size: 1rem; font-weight: 600; cursor: pointer; text-decoration: none; margin-top: 8px; }
+    .btn:active { background: #1d4ed8; }
+    .btn-secondary { background: #10b981; margin-top: 8px; }
+    .btn-secondary:active { background: #059669; }
+    #fileInput { display: none; }
+    .preview { width: 100%; border-radius: 8px; margin-top: 12px; max-height: 240px; object-fit: cover; display: none; }
+    .status { margin-top: 12px; font-size: 0.9rem; text-align: center; color: #2563eb; font-weight: 500; display: none; }
+    .event-card { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 10px; padding: 14px; margin-top: 12px; }
+    .event-title { font-weight: 600; font-size: 1rem; color: #111827; }
+    .event-date { font-size: 0.85rem; color: #6b7280; margin: 4px 0; }
+    .event-desc { font-size: 0.85rem; color: #374151; margin-bottom: 10px; }
+  </style>
+</head>
+<body>
+
+  <!-- API Key Setup Card -->
+  <div class="card" id="apiKeyCard">
+    <h1>1. API-Schlüssel einrichten</h1>
+    <p>Hole deinen kostenlosen Gemini API Key von <strong>aistudio.google.com</strong>. Er wird sicher nur lokal auf deinem Handy gespeichert.</p>
+    <input type="password" id="apiKeyInput" placeholder="AIzaSy...">
+    <button class="btn" onclick="saveApiKey()">Schlüssel speichern</button>
+  </div>
+
+  <!-- Foto Scan Card -->
+  <div class="card" id="scanCard" style="display: none;">
+    <h1>Zettel scannen</h1>
+    <p>Fotografiere den Aushang oder Elternbrief direkt ab.</p>
+    <input type="file" id="fileInput" accept="image/*" capture="environment" onchange="handleImage(event)">
+    <button class="btn" onclick="document.getElementById('fileInput').click()">📷 Foto aufnehmen</button>
+    <img id="imagePreview" class="preview" alt="Vorschau">
+    <div id="statusText" class="status">KI analysiert den Zettel...</div>
+  </div>
+
+  <!-- Ergebnisse Card -->
+  <div class="card" id="resultsCard" style="display: none;">
+    <h1>Gefundene Termine</h1>
+    <div id="eventsContainer"></div>
+  </div>
+
+  <script>
+    window.addEventListener('DOMContentLoaded', () => {
+      const savedKey = localStorage.getItem('gemini_api_key');
+      if (savedKey) {
+        document.getElementById('apiKeyCard').style.display = 'none';
+        document.getElementById('scanCard').style.display = 'block';
+      }
+    });
+
+    function saveApiKey() {
+      const key = document.getElementById('apiKeyInput').value.trim();
+      if (!key) {
+        alert('Bitte gib einen gültigen API Key ein.');
+        return;
+      }
+      localStorage.setItem('gemini_api_key', key);
+      document.getElementById('apiKeyCard').style.display = 'none';
+      document.getElementById('scanCard').style.display = 'block';
+    }
+
+    async function handleImage(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const preview = document.getElementById('imagePreview');
+      preview.src = URL.createObjectURL(file);
+      preview.style.display = 'block';
+
+      const status = document.getElementById('statusText');
+      status.style.display = 'block';
+      status.innerText = 'Foto wird vorbereitet...';
+
+      const base64Data = await convertToBase64(file);
+      analyzeWithGemini(base64Data, file.type);
+    }
+
+    function convertToBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = () => {
+          const base64String = reader.result.split(',')[1];
+          resolve(base64String);
+        };
+        reader.onerror = error => reject(error);
+      });
+    }
+
+    async function analyzeWithGemini(base64Image, mimeType) {
+      const apiKey = localStorage.getItem('gemini_api_key');
+      const status = document.getElementById('statusText');
+      status.innerText = 'Gemini extrahiert Termine...';
+
+      const today = new Date().toISOString().split('T')[0];
+
+      const prompt = `
+Du bist ein Termin-Extraktor für Elternbriefe und Kita-Zettel.
+Heutiges Datum als Referenz: ${today}.
+Extrahiere alle Termine, Deadlines, Schließtage oder Veranstaltungen.
+Berechne relative Daten (wie "nächster Dienstag" oder "übernächste Woche Freitag") exakt anhand des heutigen Datums.
+Wenn keine Uhrzeit angegeben ist, setze allDay auf true und nutze Standardzeiten (z. B. 08:00 bis 16:00).
+Antworte ausschließlich im JSON-Format ohne Markdown-Fences:
+{
+  "events": [
+    {
+      "title": "Kurzer, prägnanter Titel",
+      "startDate": "YYYY-MM-DDTHH:MM:SS",
+      "endDate": "YYYY-MM-DDTHH:MM:SS",
+      "description": "Was ist mitzubringen / Notizen",
+      "allDay": false
+    }
+  ]
+}
+`;
+
+      const requestBody = {
+        contents: [
+          {
+            parts: [
+              { text: prompt },
+              { inline_data: { mime_type: mimeType, data: base64Image } }
+            ]
+          }
+        ],
+        generationConfig: {
+          response_mime_type: "application/json"
+        }
+      };
+
+      try {
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(requestBody)
+          }
+        );
+
+        const data = await response.json();
+
+        if (data.error) {
+          throw new Error(data.error.message || 'API-Fehler');
+        }
+
+        const rawJsonText = data.candidates[0].content.parts[0].text;
+        const parsed = JSON.parse(rawJsonText);
+
+        renderEvents(parsed.events || []);
+        status.style.display = 'none';
+      } catch (err) {
+        status.innerText = 'Fehler: ' + err.message;
+        console.error(err);
+      }
+    }
+
+    function renderEvents(events) {
+      const resultsCard = document.getElementById('resultsCard');
+      const container = document.getElementById('eventsContainer');
+      container.innerHTML = '';
+
+      if (events.length === 0) {
+        container.innerHTML = '<p>Keine Termine auf dem Zettel erkannt.</p>';
+        resultsCard.style.display = 'block';
+        return;
+      }
+
+      events.forEach(ev => {
+        const eventEl = document.createElement('div');
+        eventEl.className = 'event-card';
+
+        const startFormatted = ev.startDate.replace(/[-:]/g, '');
+        const endFormatted = ev.endDate.replace(/[-:]/g, '');
+        
+        // Link für Google Kalender
+        const gcalUrl = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(ev.title)}&dates=${startFormatted}/${endFormatted}&details=${encodeURIComponent(ev.description || '')}`;
+
+        eventEl.innerHTML = `
+          <div class="event-title">${escapeHtml(ev.title)}</div>
+          <div class="event-date">📅 ${new Date(ev.startDate).toLocaleString('de-DE')}</div>
+          <div class="event-desc">${escapeHtml(ev.description || 'Keine Notizen')}</div>
+          <a href="${gcalUrl}" target="_blank" class="btn btn-secondary">In Google Kalender speichern</a>
+        `;
+        container.appendChild(eventEl);
+      });
+
+      resultsCard.style.display = 'block';
+    }
+
+    function escapeHtml(string) {
+      return String(string).replace(/[&<>"']/g, function(s) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[s];
+      });
+    }
+  </script>
+</body>
+</html>
